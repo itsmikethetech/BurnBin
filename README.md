@@ -2,7 +2,7 @@
 
 A simple, user-friendly Python application that allows you to share files online with public links using Cloudflare Tunnel. 
 
-Note: This project uses a dual-license model. The code is open source but the binaries fall under an EULA. Consider it dono-ware. :)
+Note: This project uses a dual-license model. Feel free to check out the code here, or [donate ($1+) to download a built binary from Itch.io](https://mikethetech.itch.io/burnbin). :)
 
 ## Features
 
