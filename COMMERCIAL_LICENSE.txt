@@ -1,0 +1,56 @@
+COMMERCIAL LICENSE AGREEMENT (BINARY ONLY)
+Effective Date: Upon Download or Installation
+
+This Commercial License Agreement ("Agreement") applies to all compiled,
+executable, or otherwise non-source versions of the Software ("Binary"),
+produced and distributed by PyroSoft Productions.
+
+The source code version of this Software is licensed separately under the
+MIT License and is jointly owned by PyroSoft Productions and Playcast.io.
+This Agreement applies only to the Binary, not the source code.
+
+1. GRANT OF LICENSE
+PyroSoft Productions grants you a limited, non-exclusive, non-transferable,
+revocable license to install and use the Binary for personal or commercial
+use, subject to the terms below. This license does not grant rights to the
+source code.
+
+2. PAYMENT & AUTHORIZATION
+Use of the Binary requires a valid purchase, subscription, or written
+authorization from PyroSoft Productions. Unauthorized use of the Binary is
+strictly prohibited.
+
+3. RESTRICTIONS
+Under this Agreement, you may NOT:
+• redistribute, resell, sublicense, or publicly share the Binary;
+• modify, reverse engineer, decompile, or otherwise attempt to access source
+  code from the Binary;
+• circumvent licensing, payment, or activation mechanisms;
+• bundle, embed, or distribute the Binary in any product or service without
+  express written permission from PyroSoft Productions.
+
+4. OWNERSHIP
+The Binary is copyright PyroSoft Productions. All rights not expressly
+granted herein are reserved. No rights to trademarks, branding, design
+assets, or internal technologies are granted.
+
+5. UPDATES & SUPPORT
+PyroSoft Productions may provide updates, patches, or bug fixes at its
+discretion. Access to updates may require a current license or subscription.
+
+6. TERMINATION
+This Agreement terminates automatically if you violate any term. Upon
+termination, you must stop using the Binary and destroy all copies.
+
+7. NO WARRANTY
+The Binary is provided “AS IS” without warranties of any kind. PyroSoft
+Productions is not liable for any damages arising from use of the Binary.
+
+8. GOVERNING LAW
+This Agreement is governed by the laws of the jurisdiction in which
+PyroSoft Productions operates, without regard to conflict-of-law principles.
+
+By downloading, installing, or using the Binary, you acknowledge that you
+have read and agree to this Commercial License Agreement.
+
+PyroSoft Productions
