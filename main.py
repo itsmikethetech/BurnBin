@@ -308,7 +308,7 @@ class FileShareApp:
             cursor="hand2",
             anchor=tk.W
         )
-        self.url_label.bind("<Button-1>", lambda e: self.copy_url())
+        self.url_label.bind("<Button-1>", lambda e: self.open_url())
         self.url_label.bind("<Enter>", lambda e: self.url_label.config(fg=self.colors['bg_button_primary_hover']))
         self.url_label.bind("<Leave>", lambda e: self.url_label.config(fg=self.colors['accent']))
         
@@ -621,9 +621,8 @@ class FileShareApp:
         return request.remote_addr
     
     def setup_flask_routes(self):
-        @self.flask_app.route('/')
-        def index():
-            html = """
+        # Define HTML template once
+        html_template = """
             <!DOCTYPE html>
             <html>
             <head>
@@ -763,6 +762,12 @@ class FileShareApp:
                             </button>
                         </form>
                         <div id="uploadStatus" style="margin-top: 15px; color: #b0b0b0; display: none;"></div>
+                        <div class="progress-container" id="uploadProgress" style="display: none;">
+                            <div class="progress-bar">
+                                <div class="progress-fill" id="uploadProgressFill">0%</div>
+                            </div>
+                            <div class="progress-text" id="uploadProgressText">Preparing upload...</div>
+                        </div>
                     </div>
                 </div>
                 <script>
@@ -779,9 +784,9 @@ class FileShareApp:
                                     <li class="file-item">
                                         <div class="file-name">${file.name}</div>
                                         <div class="file-info">Size: ${file.size} | Added: ${file.upload_time}</div>
-                                        <a href="/download/${file.id}" class="download-btn" onclick="trackDownload('${file.id}'); return true;">
+                                        <button class="download-btn" id="download-btn-${file.id}" onclick="trackDownload('${file.id}', event);">
                                             Download File
-                                        </a>
+                                        </button>
                                         <div class="progress-container" id="progress-${file.id}">
                                             <div class="progress-bar">
                                                 <div class="progress-fill" id="progress-fill-${file.id}">0%</div>
@@ -793,48 +798,161 @@ class FileShareApp:
                             });
                     }
                     
-                    function trackDownload(fileId) {
+                    // Track active downloads and intervals to prevent duplicates
+                    const activeDownloads = {};
+                    
+                    function trackDownload(fileId, event) {
+                        // Prevent default if event exists
+                        if (event) {
+                            event.preventDefault();
+                            event.stopPropagation();
+                        }
+                        
+                        // Prevent multiple simultaneous downloads
+                        if (activeDownloads[fileId]) {
+                            return;
+                        }
+                        
                         const progressContainer = document.getElementById('progress-' + fileId);
                         const progressFill = document.getElementById('progress-fill-' + fileId);
                         const progressText = document.getElementById('progress-text-' + fileId);
+                        const downloadBtn = document.getElementById('download-btn-' + fileId);
                         
                         if (progressContainer) {
                             progressContainer.style.display = 'block';
                         }
                         
+                        // Disable button to prevent multiple clicks
+                        if (downloadBtn) {
+                            downloadBtn.disabled = true;
+                            downloadBtn.style.opacity = '0.6';
+                            downloadBtn.style.cursor = 'not-allowed';
+                        }
+                        
+                        // Mark as active
+                        activeDownloads[fileId] = true;
+                        
+                        // Track download click
                         fetch('/api/track-download', {
                             method: 'POST',
                             headers: {'Content-Type': 'application/json'},
                             body: JSON.stringify({file_id: fileId})
                         });
                         
-                        // Simulate progress (actual progress would come from server)
-                        let progress = 0;
-                        const interval = setInterval(() => {
-                            progress += Math.random() * 15;
-                            if (progress > 100) progress = 100;
-                            if (progressFill) {
-                                progressFill.style.width = progress + '%';
-                                progressFill.textContent = Math.round(progress) + '%';
-                            }
-                            if (progressText) {
-                                const mb = (progress / 100 * parseFloat(document.querySelector('.file-info').textContent.match(/\\d+\\.?\\d*/)[0]) || 0).toFixed(2);
-                                progressText.textContent = `Downloading... ${mb} MB`;
-                            }
-                            if (progress >= 100) {
-                                clearInterval(interval);
-                                if (progressText) {
-                                    progressText.textContent = 'Download complete!';
+                        // Create session first, then start download
+                        fetch('/api/start-download/' + fileId)
+                            .then(r => r.json())
+                            .then(data => {
+                                if (data.error) {
+                                    delete activeDownloads[fileId];
+                                    if (downloadBtn) {
+                                        downloadBtn.disabled = false;
+                                        downloadBtn.style.opacity = '1';
+                                        downloadBtn.style.cursor = 'pointer';
+                                    }
+                                    if (progressText) {
+                                        progressText.textContent = 'Error: ' + data.error;
+                                        progressText.style.color = '#ff4444';
+                                    }
+                                    return;
                                 }
-                            }
-                        }, 200);
+                                
+                                const sessionId = data.session_id;
+                                const fileSize = data.file_size;
+                                
+                                // Start native browser download (fast!)
+                                const a = document.createElement('a');
+                                a.href = data.download_url;
+                                a.style.display = 'none';
+                                a.download = '';
+                                document.body.appendChild(a);
+                                a.click();
+                                document.body.removeChild(a);
+                                
+                                // Poll for real progress
+                                const progressInterval = setInterval(() => {
+                                    fetch('/api/download-progress/' + sessionId)
+                                        .then(r => r.json())
+                                        .then(progressData => {
+                                            if (progressData.error) {
+                                                clearInterval(progressInterval);
+                                                delete activeDownloads[fileId];
+                                                if (downloadBtn) {
+                                                    downloadBtn.disabled = false;
+                                                    downloadBtn.style.opacity = '1';
+                                                    downloadBtn.style.cursor = 'pointer';
+                                                }
+                                                return;
+                                            }
+                                            
+                                            const progress = Math.min(progressData.progress || 0, 100);
+                                            const bytesSent = progressData.bytes_sent || 0;
+                                            const totalSize = progressData.file_size || fileSize;
+                                            
+                                            if (progressFill) {
+                                                progressFill.style.width = progress + '%';
+                                                progressFill.textContent = Math.round(progress) + '%';
+                                            }
+                                            
+                                            if (progressText) {
+                                                const mbSent = (bytesSent / (1024 * 1024)).toFixed(2);
+                                                const mbTotal = (totalSize / (1024 * 1024)).toFixed(2);
+                                                progressText.textContent = `Downloading... ${mbSent} MB / ${mbTotal} MB (${Math.round(progress)}%)`;
+                                            }
+                                            
+                                            if (progressData.status === 'completed' || progress >= 100) {
+                                                clearInterval(progressInterval);
+                                                delete activeDownloads[fileId];
+                                                if (downloadBtn) {
+                                                    downloadBtn.disabled = false;
+                                                    downloadBtn.style.opacity = '1';
+                                                    downloadBtn.style.cursor = 'pointer';
+                                                }
+                                                if (progressFill) {
+                                                    progressFill.style.width = '100%';
+                                                    progressFill.textContent = '100%';
+                                                }
+                                                if (progressText) {
+                                                    const mbTotal = (totalSize / (1024 * 1024)).toFixed(2);
+                                                    progressText.textContent = `Download complete! ${mbTotal} MB`;
+                                                }
+                                            }
+                                        })
+                                        .catch(err => {
+                                            console.error('Progress fetch error:', err);
+                                            clearInterval(progressInterval);
+                                            delete activeDownloads[fileId];
+                                            if (downloadBtn) {
+                                                downloadBtn.disabled = false;
+                                                downloadBtn.style.opacity = '1';
+                                                downloadBtn.style.cursor = 'pointer';
+                                            }
+                                        });
+                                }, 300); // Poll every 300ms
+                            })
+                            .catch(err => {
+                                console.error('Error starting download:', err);
+                                delete activeDownloads[fileId];
+                                if (downloadBtn) {
+                                    downloadBtn.disabled = false;
+                                    downloadBtn.style.opacity = '1';
+                                    downloadBtn.style.cursor = 'pointer';
+                                }
+                                if (progressText) {
+                                    progressText.textContent = 'Error starting download';
+                                    progressText.style.color = '#ff4444';
+                                }
+                            });
                     }
                     
-                    // Upload form handler
-                    document.getElementById('uploadForm').addEventListener('submit', async function(e) {
+                    // Upload form handler with real progress tracking
+                    document.getElementById('uploadForm').addEventListener('submit', function(e) {
                         e.preventDefault();
                         const fileInput = document.getElementById('fileInput');
                         const statusDiv = document.getElementById('uploadStatus');
+                        const progressContainer = document.getElementById('uploadProgress');
+                        const progressFill = document.getElementById('uploadProgressFill');
+                        const progressText = document.getElementById('uploadProgressText');
                         
                         if (!fileInput.files[0]) {
                             statusDiv.textContent = 'Please select a file';
@@ -843,36 +961,97 @@ class FileShareApp:
                             return;
                         }
                         
+                        const file = fileInput.files[0];
+                        const fileSize = file.size;
                         const formData = new FormData();
-                        formData.append('file', fileInput.files[0]);
+                        formData.append('file', file);
                         
-                        statusDiv.textContent = 'Uploading...';
-                        statusDiv.style.display = 'block';
-                        statusDiv.style.color = '#ff6b35';
+                        // Show progress bar
+                        progressContainer.style.display = 'block';
+                        statusDiv.style.display = 'none';
                         
-                        try {
-                            const response = await fetch('/api/upload', {
-                                method: 'POST',
-                                body: formData
-                            });
-                            
-                            const data = await response.json();
-                            
-                            if (response.ok) {
-                                statusDiv.textContent = '✅ File uploaded successfully!';
-                                statusDiv.style.color = '#ff6b35';
-                                fileInput.value = '';
-                                setTimeout(() => {
-                                    statusDiv.style.display = 'none';
-                                }, 3000);
-                            } else {
-                                statusDiv.textContent = '❌ Error: ' + (data.error || 'Upload failed');
-                                statusDiv.style.color = '#ff4444';
+                        // Use XMLHttpRequest for upload progress tracking
+                        const xhr = new XMLHttpRequest();
+                        
+                        // Track upload progress
+                        xhr.upload.addEventListener('progress', function(e) {
+                            if (e.lengthComputable) {
+                                const percentComplete = (e.loaded / e.total) * 100;
+                                const mbLoaded = (e.loaded / (1024 * 1024)).toFixed(2);
+                                const mbTotal = (e.total / (1024 * 1024)).toFixed(2);
+                                
+                                if (progressFill) {
+                                    progressFill.style.width = percentComplete + '%';
+                                    progressFill.textContent = Math.round(percentComplete) + '%';
+                                }
+                                
+                                if (progressText) {
+                                    progressText.textContent = `Uploading... ${mbLoaded} MB / ${mbTotal} MB (${Math.round(percentComplete)}%)`;
+                                }
                             }
-                        } catch (error) {
-                            statusDiv.textContent = '❌ Error: ' + error.message;
+                        });
+                        
+                        // Handle completion
+                        xhr.addEventListener('load', function() {
+                            if (xhr.status === 200) {
+                                try {
+                                    const data = JSON.parse(xhr.responseText);
+                                    if (data.status === 'success') {
+                                        if (progressFill) {
+                                            progressFill.style.width = '100%';
+                                            progressFill.textContent = '100%';
+                                        }
+                                        if (progressText) {
+                                            const mbTotal = (fileSize / (1024 * 1024)).toFixed(2);
+                                            progressText.textContent = `Upload complete! ${mbTotal} MB`;
+                                        }
+                                        
+                                        statusDiv.textContent = '✅ File uploaded successfully!';
+                                        statusDiv.style.color = '#ff6b35';
+                                        statusDiv.style.display = 'block';
+                                        fileInput.value = '';
+                                        
+                                        // Hide progress after 3 seconds
+                                        setTimeout(() => {
+                                            progressContainer.style.display = 'none';
+                                            statusDiv.style.display = 'none';
+                                        }, 3000);
+                                        
+                                        // Refresh file list
+                                        updateFileList();
+                                    } else {
+                                        throw new Error(data.error || 'Upload failed');
+                                    }
+                                } catch (err) {
+                                    statusDiv.textContent = '❌ Error: ' + err.message;
+                                    statusDiv.style.color = '#ff4444';
+                                    statusDiv.style.display = 'block';
+                                    progressContainer.style.display = 'none';
+                                }
+                            } else {
+                                try {
+                                    const data = JSON.parse(xhr.responseText);
+                                    statusDiv.textContent = '❌ Error: ' + (data.error || 'Upload failed');
+                                } catch {
+                                    statusDiv.textContent = '❌ Error: Upload failed (HTTP ' + xhr.status + ')';
+                                }
+                                statusDiv.style.color = '#ff4444';
+                                statusDiv.style.display = 'block';
+                                progressContainer.style.display = 'none';
+                            }
+                        });
+                        
+                        // Handle errors
+                        xhr.addEventListener('error', function() {
+                            statusDiv.textContent = '❌ Error: Network error during upload';
                             statusDiv.style.color = '#ff4444';
-                        }
+                            statusDiv.style.display = 'block';
+                            progressContainer.style.display = 'none';
+                        });
+                        
+                        // Start upload
+                        xhr.open('POST', '/api/upload');
+                        xhr.send(formData);
                     });
                     
                     updateFileList();
@@ -881,7 +1060,18 @@ class FileShareApp:
             </body>
             </html>
             """
-            return html
+        
+        @self.flask_app.route('/')
+        def index():
+            return html_template
+        
+        # Add catch-all route to handle any path issues (redirect unknown paths to root)
+        @self.flask_app.route('/<path:path>')
+        def catch_all(path):
+            # If it's not a known API route, redirect to root
+            if not path.startswith(('api/', 'download/', 'download-upload/')):
+                return html_template
+            return "Not found", 404
         
         @self.flask_app.route('/download/<file_id>')
         def download_file(file_id):
@@ -894,17 +1084,25 @@ class FileShareApp:
             if not os.path.exists(file_path):
                 return "File not found", 404
             
-            # Track download start
-            session_id = str(uuid.uuid4())
+            # Get session ID from query parameter or create new one
+            session_id = request.args.get('session')
             file_size = os.path.getsize(file_path)
-            self.download_sessions[session_id] = {
-                'file_id': file_id,
-                'start_time': datetime.now(),
-                'progress': 0,
-                'status': 'downloading',
-                'file_size': file_size,
-                'bytes_sent': 0
-            }
+            
+            if session_id and session_id in self.download_sessions:
+                # Use existing session
+                self.download_sessions[session_id]['status'] = 'downloading'
+                self.download_sessions[session_id]['start_time'] = datetime.now()
+            else:
+                # Create new session if not provided
+                session_id = str(uuid.uuid4())
+                self.download_sessions[session_id] = {
+                    'file_id': file_id,
+                    'start_time': datetime.now(),
+                    'progress': 0,
+                    'status': 'downloading',
+                    'file_size': file_size,
+                    'bytes_sent': 0
+                }
             
             # Increment download count
             self.shared_files[file_id]['downloads'] += 1
@@ -913,11 +1111,11 @@ class FileShareApp:
             # Log activity
             self.log_activity(f"Download started: {file_info['name']} (Session: {session_id[:8]})")
             
-            # Create a generator to track progress
+            # Create a generator to track progress with larger chunks for better performance
             def generate():
                 with open(file_path, 'rb') as f:
                     while True:
-                        chunk = f.read(8192)  # 8KB chunks
+                        chunk = f.read(131072)  # 128KB chunks for better performance
                         if not chunk:
                             break
                         self.download_sessions[session_id]['bytes_sent'] += len(chunk)
@@ -940,7 +1138,9 @@ class FileShareApp:
                 mimetype='application/octet-stream',
                 headers={
                     'Content-Disposition': f'attachment; filename="{file_info["name"]}"',
-                    'Content-Length': str(file_size)
+                    'Content-Length': str(file_size),
+                    'X-Session-Id': session_id,  # Include session ID for progress tracking
+                    'Cache-Control': 'no-cache'  # Prevent caching for accurate progress
                 }
             )
         
@@ -963,6 +1163,36 @@ class FileShareApp:
             if file_id in self.shared_files:
                 self.log_activity(f"Download clicked: {self.shared_files[file_id]['name']}")
             return jsonify({'status': 'ok'})
+        
+        @self.flask_app.route('/api/start-download/<file_id>')
+        def start_download(file_id):
+            """Create a download session and return session ID"""
+            if file_id not in self.shared_files:
+                return jsonify({'error': 'File not found'}), 404
+            
+            file_info = self.shared_files[file_id]
+            file_path = file_info['path']
+            
+            if not os.path.exists(file_path):
+                return jsonify({'error': 'File not found'}), 404
+            
+            # Create session
+            session_id = str(uuid.uuid4())
+            file_size = os.path.getsize(file_path)
+            self.download_sessions[session_id] = {
+                'file_id': file_id,
+                'start_time': datetime.now(),
+                'progress': 0,
+                'status': 'pending',
+                'file_size': file_size,
+                'bytes_sent': 0
+            }
+            
+            return jsonify({
+                'session_id': session_id,
+                'file_size': file_size,
+                'download_url': f'/download/{file_id}?session={session_id}'
+            })
         
         @self.flask_app.route('/api/download-progress/<session_id>')
         def get_download_progress(session_id):
@@ -1126,11 +1356,42 @@ class FileShareApp:
                 self.root.clipboard_append(link)
                 messagebox.showinfo("Link Copied", f"Download link copied to clipboard:\n{link}")
     
-    def copy_url(self):
-        if self.public_url:
-            self.root.clipboard_clear()
-            self.root.clipboard_append(self.public_url)
-            messagebox.showinfo("URL Copied", f"Public URL copied to clipboard:\n{self.public_url}")
+    def is_valid_url(self, url):
+        """Validate that URL is properly formatted"""
+        if not url:
+            return False
+        url = url.strip()
+        # Check if it's a valid HTTPS URL with proper domain
+        if url.startswith('https://') and ('.trycloudflare.com' in url or '.cloudflared.net' in url):
+            # Basic validation - check it doesn't have spaces or invalid chars
+            if ' ' not in url and len(url) > 20:
+                return True
+        return False
+    
+    def open_url(self):
+        """Open the URL in the default browser"""
+        if not self.server_running:
+            messagebox.showwarning("Server Not Ready", "Server is not running yet. Please wait...")
+            return
+        
+        url_to_open = None
+        if self.public_url and self.is_valid_url(self.public_url):
+            # Use public URL as-is (cloudflared handles routing)
+            url_to_open = self.public_url.strip()
+        elif self.server_running:
+            url_to_open = f"http://127.0.0.1:{self.local_port}"
+        
+        if url_to_open:
+            import webbrowser
+            # Ensure URL ends with / for root route
+            if not url_to_open.endswith('/'):
+                url_to_open += '/'
+            try:
+                webbrowser.open(url_to_open)
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to open browser:\n{str(e)}")
+        else:
+            messagebox.showwarning("URL Not Available", "Public URL is not available yet. Please wait for the tunnel to establish.")
     
     def open_website(self):
         import webbrowser
@@ -1296,8 +1557,9 @@ class FileShareApp:
                 return
             
             try:
-                # Start tunnel
+                # Start tunnel with a small delay to avoid rapid reconnections
                 self.log_activity("Starting Cloudflare Tunnel...")
+                time.sleep(0.5)  # Small delay to avoid rapid tunnel creation
                 process = subprocess.Popen(
                     ['cloudflared', 'tunnel', '--url', f'http://127.0.0.1:{self.local_port}'],
                     stdout=subprocess.PIPE,
@@ -1310,18 +1572,63 @@ class FileShareApp:
                 
                 # Read output to get public URL
                 import re
+                url_found = False
+                timeout = time.time() + 30  # 30 second timeout
+                error_messages = []
+                
                 for line in process.stdout:
-                    # Look for cloudflare tunnel URLs (trycloudflare.com or cloudflared.net domain)
-                    if 'trycloudflare.com' in line or 'cloudflared.net' in line:
-                        url_pattern = r'https://[a-zA-Z0-9-]+\.(?:trycloudflare\.com|cloudflared\.net)'
-                        match = re.search(url_pattern, line)
-                        if match:
-                            url = match.group(0)
-                            self.public_url = url
-                            self.log_activity(f"Tunnel active! Public URL: {self.public_url}")
-                            break
-                    elif process.poll() is not None:
+                    if time.time() > timeout:
+                        self.log_activity("Timeout waiting for tunnel URL")
                         break
+                    
+                    # Log tunnel output for debugging
+                    line_stripped = line.strip()
+                    if line_stripped:
+                        # Check for error messages indicating rate limits or issues
+                        line_lower = line_stripped.lower()
+                        if any(keyword in line_lower for keyword in ['error', 'failed', 'limit', 'rate', 'quota', 'too many']):
+                            error_messages.append(line_stripped)
+                            self.log_activity(f"⚠️ Tunnel warning: {line_stripped}")
+                        
+                        # Only log non-error lines if verbose (to reduce spam)
+                        elif 'https://' in line_stripped or 'tunnel' in line_lower:
+                            self.log_activity(f"Tunnel: {line_stripped}")
+                    
+                    # Look for cloudflare tunnel URLs (trycloudflare.com or cloudflared.net domain)
+                    # Updated patterns to match various cloudflared output formats
+                    url_patterns = [
+                        r'https://[a-zA-Z0-9-]+\.trycloudflare\.com',
+                        r'https://[a-zA-Z0-9-]+\.cloudflared\.net',
+                        r'https://[a-zA-Z0-9-]+\.(?:trycloudflare|cloudflared)\.(?:com|net)',
+                    ]
+                    
+                    for pattern in url_patterns:
+                        match = re.search(pattern, line, re.IGNORECASE)
+                        if match:
+                            url = match.group(0).strip()
+                            # Validate URL format
+                            if url.startswith('https://') and ('.trycloudflare.com' in url or '.cloudflared.net' in url):
+                                self.public_url = url
+                                self.log_activity(f"✅ Tunnel active! Public URL: {self.public_url}")
+                                url_found = True
+                                break
+                    
+                    if url_found:
+                        break
+                    
+                    if process.poll() is not None:
+                        self.log_activity("❌ Cloudflared process ended unexpectedly")
+                        break
+                
+                if not url_found:
+                    if error_messages:
+                        error_msg = "\n".join(error_messages[-3:])  # Show last 3 errors
+                        self.log_activity(f"❌ Tunnel failed. Possible Cloudflare rate limit or error:")
+                        self.log_activity(f"   {error_msg}")
+                        self.log_activity("💡 Tip: Wait a few minutes and try again, or restart the app.")
+                    else:
+                        self.log_activity("⚠️ Warning: Could not extract tunnel URL from cloudflared output")
+                        self.log_activity("💡 Tip: Cloudflare may be rate-limiting. Wait 5-10 minutes and restart.")
                 
             except Exception as e:
                 self.log_activity(f"Tunnel error: {str(e)}")
@@ -1381,15 +1688,25 @@ class FileShareApp:
         cloudflared_installed = self.check_cloudflared_installed()
         
         if self.server_running:
-            if self.public_url:
+            if self.public_url and self.is_valid_url(self.public_url):
                 self.status_label.config(
                     text="🔥 Server running | 🔥 Tunnel active",
                     fg=self.colors['success']
                 )
                 self.url_label.config(
-                    text=f"🔥 {self.public_url} (Click to copy)",
+                    text=f"🔥 {self.public_url} (Click to open)",
                     fg=self.colors['accent']
                 )
+                self.url_label.pack(fill=tk.X)
+                self.install_cloudflared_btn.pack_forget()
+            elif self.public_url:
+                # Invalid URL - reset it
+                self.public_url = None
+                self.status_label.config(
+                    text="🔥 Server running | ⏳ Starting tunnel...",
+                    fg=self.colors['warning']
+                )
+                self.url_label.config(text="")
                 self.url_label.pack(fill=tk.X)
                 self.install_cloudflared_btn.pack_forget()
             else:
@@ -1409,7 +1726,7 @@ class FileShareApp:
                     )
                     local_url = f"http://127.0.0.1:{self.local_port}"
                     self.url_label.config(
-                        text=f"🔥 Local URL: {local_url} (Click to copy)",
+                        text=f"🔥 Local URL: {local_url} (Click to open)",
                         fg=self.colors['text_secondary']
                     )
                     self.url_label.pack(fill=tk.X, pady=(0, 8))
@@ -1466,10 +1783,16 @@ class FileShareApp:
         timestamp = datetime.now().strftime("%H:%M:%S")
         log_message = f"[{timestamp}] {message}\n"
         
-        self.activity_text.config(state=tk.NORMAL)
-        self.activity_text.insert(tk.END, log_message)
-        self.activity_text.see(tk.END)
-        self.activity_text.config(state=tk.DISABLED)
+        # Only log if UI is initialized
+        if hasattr(self, 'activity_text') and self.activity_text:
+            try:
+                self.activity_text.config(state=tk.NORMAL)
+                self.activity_text.insert(tk.END, log_message)
+                self.activity_text.see(tk.END)
+                self.activity_text.config(state=tk.DISABLED)
+            except (tk.TclError, AttributeError):
+                # UI widget might not be ready yet
+                pass
     
     def format_size(self, size_bytes):
         for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
