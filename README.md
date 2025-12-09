@@ -4,6 +4,10 @@ A simple, user-friendly Python application that allows you to share files online
 
 Note: This project uses a dual-license model. Feel free to check out the code here, or [donate ($1+) to download a built binary from Itch.io](https://mikethetech.itch.io/burnbin). 😊
 
+<img width="1002" height="732" alt="image" src="https://github.com/user-attachments/assets/e4be4848-c012-4c24-bdab-55257fad7551" />
+
+<img width="999" height="919" alt="image" src="https://github.com/user-attachments/assets/6ae0ef85-a400-4cb4-b450-5865923be31a" />
+
 ## Features
 
 - 🎯 **Easy to Use**: Simple GUI designed for novice users
